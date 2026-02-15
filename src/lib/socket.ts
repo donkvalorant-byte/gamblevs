@@ -1,5 +1,7 @@
-import { io, type Socket } from "socket.io-client";
+import { io } from "socket.io-client";
 
-export const socket: Socket = io("http://localhost:3000", {
-  autoConnect: true,
+export const socket = io({
+  path: "/socket.io",
+  transports: ["websocket"], // prod’da en stabil
+  withCredentials: true,
 });
