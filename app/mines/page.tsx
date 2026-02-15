@@ -13,6 +13,18 @@ function money(n: number) {
   return x.toString();
 }
 
+type ChatMsg = {
+  id: string;
+  roomCode: string;
+  text: string;
+  ts: number;
+  from?: string;
+};
+
+function uid() {
+  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+}
+
 export default function MinesPage() {
   const router = useRouter();
 
@@ -34,6 +46,14 @@ export default function MinesPage() {
 
   const [secondsLeft, setSecondsLeft] = useState(0);
   const timerRef = useRef<number | null>(null);
+
+  // chat
+  const [chatOpen, setChatOpen] = useState(false);
+  const [activeCount, setActiveCount] = useState(0);
+  const [chatInput, setChatInput] = useState("");
+  const [messages, setMessages] = useState<ChatMsg[]>([]);
+  const [unread, setUnread] = useState(0);
+  const listRef = useRef<HTMLDivElement | null>(null);
 
   const grid = useMemo(() => Array.from({ length: SIZE }, (_, i) => i), []);
 
@@ -71,6 +91,10 @@ export default function MinesPage() {
 
     socket.emit("balance:get");
 
+    // presence + chat bootstrap
+    socket.emit("presence:get", { scope: "site" });
+    socket.emit("chat:history", { roomCode: code, limit: 50 });
+
     const onBalance = (p: { balance: number }) => setBalance(Number(p?.balance || 0));
 
     const onUpdate = (payload: any) => {
@@ -86,31 +110,60 @@ export default function MinesPage() {
       if (payload.your.busted) {
         const last = (payload.your.revealed || []).slice(-1)[0];
         setBoomIndex(typeof last === "number" ? last : null);
-        setTimeout(() => setBoomIndex(null), 650);
+      } else {
+        setBoomIndex(null);
       }
     };
 
-    const onFinish = (r: any) => {
-      if (timerRef.current) window.clearInterval(timerRef.current);
-      timerRef.current = null;
-
-      const you = r?.you; // win/lose/draw
-      const yourM = Number(r?.yourFinalMult || 1);
-      const oppM = Number(r?.oppFinalMult || 1);
-      const totalM = Number(r?.totalMult || (yourM + oppM - 1));
-      const paid = Number(r?.paid || 0);
-      const bb = Number(r?.yourBalance || 0);
-      setBalance(bb);
-
-      if (you === "win") setFinishTitle("🏆 KAZANDIN!");
-      else if (you === "lose") setFinishTitle("💀 KAYBETTİN!");
-      else setFinishTitle("🤝 BERABERE!");
-
-      setFinishLine1(`Sen x${yourM.toFixed(2)} • Rakip x${oppM.toFixed(2)} → Toplam x${totalM.toFixed(2)}`);
-
-      const net = paid - b;
+    const onFinish = (p: any) => {
+      const title = String(p?.title || "Bitti");
+      setFinishTitle(title);
+      setFinishLine1(String(p?.line1 || ""));
+      const net = Number(p?.net || 0);
+      const paid = Number(p?.paid || 0);
       const sign = net > 0 ? "+" : net < 0 ? "-" : "";
       setFinishLine2(`Bu maç: ${sign}${money(Math.abs(net))} 💰  |  Ödeme: ${money(paid)} 💰`);
+    };
+
+    const onPresence = (p: any) => {
+      const c = Number(p?.count || 0);
+      if (Number.isFinite(c)) setActiveCount(c);
+    };
+
+    const onChatHistory = (p: any) => {
+      const arr = Array.isArray(p?.messages) ? p.messages : [];
+      const safe: ChatMsg[] = arr
+        .map((m: any) => ({
+          id: String(m?.id || uid()),
+          roomCode: String(m?.roomCode || code),
+          text: String(m?.text || ""),
+          ts: Number(m?.ts || Date.now()),
+          from: m?.from ? String(m.from) : undefined,
+        }))
+        .filter((m: ChatMsg) => m.text.trim().length > 0)
+        .slice(-50);
+      setMessages(safe);
+      setTimeout(() => listRef.current?.scrollTo({ top: 999999, behavior: "auto" }), 0);
+    };
+
+    const onChatMessage = (m: any) => {
+      const msg: ChatMsg = {
+        id: String(m?.id || uid()),
+        roomCode: String(m?.roomCode || code),
+        text: String(m?.text || ""),
+        ts: Number(m?.ts || Date.now()),
+        from: m?.from ? String(m.from) : undefined,
+      };
+      if (!msg.text.trim()) return;
+      if (msg.roomCode !== code) return;
+
+      setMessages((prev) => [...prev, msg].slice(-80));
+
+      setTimeout(() => {
+        listRef.current?.scrollTo({ top: 999999, behavior: "smooth" });
+      }, 0);
+
+      if (!chatOpen) setUnread((u) => u + 1);
     };
 
     const onErr = (msg: string) => {
@@ -121,6 +174,9 @@ export default function MinesPage() {
     socket.on("balance:update", onBalance);
     socket.on("mines:update", onUpdate);
     socket.on("mines:finish", onFinish);
+    socket.on("presence:update", onPresence);
+    socket.on("chat:history", onChatHistory);
+    socket.on("chat:message", onChatMessage);
     socket.on("errorMessage", onErr);
 
     return () => {
@@ -130,9 +186,16 @@ export default function MinesPage() {
       socket.off("balance:update", onBalance);
       socket.off("mines:update", onUpdate);
       socket.off("mines:finish", onFinish);
+      socket.off("presence:update", onPresence);
+      socket.off("chat:history", onChatHistory);
+      socket.off("chat:message", onChatMessage);
       socket.off("errorMessage", onErr);
     };
-  }, [router]);
+  }, [router, chatOpen]);
+
+  useEffect(() => {
+    if (chatOpen) setUnread(0);
+  }, [chatOpen]);
 
   const disableGrid = yourBusted || yourCashed || !!finishTitle || secondsLeft <= 0;
 
@@ -158,6 +221,19 @@ export default function MinesPage() {
     router.push("/");
   };
 
+  const sendChat = () => {
+    const text = chatInput.trim();
+    if (!text) return;
+    if (!roomCode) return;
+
+    const payload = { id: uid(), roomCode, text, ts: Date.now() };
+    socket.emit("chat:send", payload);
+
+    setMessages((prev) => [...prev, payload].slice(-80));
+    setChatInput("");
+    setTimeout(() => listRef.current?.scrollTo({ top: 999999, behavior: "smooth" }), 0);
+  };
+
   return (
     <main className="minesRoot">
       <div className="minesBg">
@@ -174,9 +250,9 @@ export default function MinesPage() {
             </div>
             <div>
               <div className="brandTitle">
-                Mines VS <span className="brandAccent">GambleVS</span>
+                Mines <span className="brandAccent">GambleVS</span>
               </div>
-              <div className="brandSub">5x5 • {MINES} mayın • Rakip: gizli</div>
+              <div className="brandSub">5x5 • {MINES} mayın</div>
             </div>
           </div>
 
@@ -201,10 +277,6 @@ export default function MinesPage() {
               <div className="chipLabel">ÇARPAN</div>
               <div className="chipValue">x{yourMultiplier.toFixed(2)}</div>
             </div>
-            <div className="chip">
-              <div className="chipLabel">RAKİP</div>
-              <div className="chipValue chipMuted">Gizli</div>
-            </div>
           </div>
         </header>
 
@@ -215,12 +287,10 @@ export default function MinesPage() {
               <div className="panelFx" />
               <div className="panelBody">
                 <div className="panelTop">
-                  <div className="panelNote">
-                    Rakip hamleleri <b>görmez</b>. Sonuç oyun bitince gelir.
-                  </div>
+                  <div className="panelNote">Sonuç oyun bitince gelir.</div>
                   <div className="panelBtns">
                     <button className="btnCash" onClick={cashout} disabled={yourBusted || yourCashed || !!finishTitle}>
-                      ÇEK (Cashout)
+                      ÇEK
                     </button>
                     <button className="btnExit" onClick={backHome}>
                       Çık
@@ -269,8 +339,6 @@ export default function MinesPage() {
                     </div>
                   </div>
                 </div>
-
-                <div className="panelFoot">✅ Rakip hakkında oyun sırasında <b>hiçbir bilgi yok</b>.</div>
               </div>
             </div>
           </section>
@@ -282,21 +350,73 @@ export default function MinesPage() {
                 <div className="finishLine">{finishLine1}</div>
                 <div className="finishLine2">{finishLine2}</div>
                 <button className="btnBack" onClick={backHome}>
-                  Lobiye dön
+                  Lobi
                 </button>
               </div>
             )}
 
             <div className="sideCard">
-              <div className="sideTitle">Stitch VS</div>
+              <div className="sideTitle">Aktif</div>
               <div className="sideText">
-                • Kapalı kutu: <b>Stitch kumaş</b>
-                <br />• Güvenli kutu: <b>mavi kristal</b>
-                <br />• Mayın: <b>Stitch</b> + <b>RGB kablo</b>
+                <span className="activeDot" /> {activeCount} kişi
               </div>
-              <div className="sideMini">Bu sürümde CSS ayrı dosyada, garanti yüklenir.</div>
+              <div className="sideMini">Chat sağ altta.</div>
             </div>
           </aside>
+        </div>
+      </div>
+
+      <button
+        className={"chatFab " + (chatOpen ? "chatFabOpen" : "")}
+        onClick={() => setChatOpen((v) => !v)}
+        aria-label="chat"
+      >
+        CHAT
+        {unread > 0 && <span className="chatBadge">{unread > 99 ? "99+" : unread}</span>}
+      </button>
+
+      <div className={"chatPanel " + (chatOpen ? "chatPanelOpen" : "")}>
+        <div className="chatHead">
+          <div className="chatTitle">ODA CHAT</div>
+          <div className="chatMeta">
+            <span className="activeDot" /> {activeCount}
+          </div>
+          <button className="chatClose" onClick={() => setChatOpen(false)} aria-label="close">
+            ✕
+          </button>
+        </div>
+
+        <div className="chatList" ref={listRef}>
+          {messages.length === 0 ? (
+            <div className="chatEmpty">Mesaj yok.</div>
+          ) : (
+            messages.map((m) => (
+              <div key={m.id} className="chatMsg">
+                <div className="chatBubble">
+                  <div className="chatText">{m.text}</div>
+                  <div className="chatTime">
+                    {new Date(m.ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}
+                  </div>
+                </div>
+              </div>
+            ))
+          )}
+        </div>
+
+        <div className="chatInputRow">
+          <input
+            className="chatInput"
+            value={chatInput}
+            onChange={(e) => setChatInput(e.target.value)}
+            placeholder="yaz..."
+            onKeyDown={(e) => {
+              if (e.key === "Enter") sendChat();
+            }}
+            maxLength={200}
+          />
+          <button className="chatSend" onClick={sendChat}>
+            GÖNDER
+          </button>
         </div>
       </div>
     </main>

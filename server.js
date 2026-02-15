@@ -17,6 +17,12 @@ const SIZE = 25;
 const MINES = 3;
 const MATCH_DURATION = 60000;
 
+// ✅ PRESENCE + GLOBAL CHAT (site geneli)
+let activeCount = 0;
+const CHAT_MAX = 200;
+const CHAT_HISTORY_LIMIT = 100;
+const chatHistory = []; // { id, text, ts }
+
 // ---------------- BALANCE ----------------
 function getBalance(id) {
   if (!balances.has(id)) balances.set(id, START_BALANCE);
@@ -44,6 +50,14 @@ function calcMultiplier(picks) {
   return Number((1 + picks * 0.25).toFixed(2));
 }
 
+function safeText(s) {
+  // basit temizlik
+  return String(s || "")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, CHAT_MAX);
+}
+
 // ---------------- SERVER ----------------
 app.prepare().then(() => {
   const server = http.createServer((req, res) => handle(req, res));
@@ -56,12 +70,43 @@ app.prepare().then(() => {
   });
 
   io.on("connection", (socket) => {
+    // ✅ aktif kişi say
+    activeCount++;
+    io.emit("presence:update", { count: activeCount });
+
     // give 10k
     getBalance(socket.id);
     socket.emit("balance:update", { balance: getBalance(socket.id) });
 
     socket.on("balance:get", () => {
       socket.emit("balance:update", { balance: getBalance(socket.id) });
+    });
+
+    // ✅ presence isteyene anlık sayı dön
+    socket.on("presence:get", () => {
+      socket.emit("presence:update", { count: activeCount });
+    });
+
+    // ✅ global chat history
+    socket.on("chat:history", ({ limit } = {}) => {
+      const lim = Math.max(1, Math.min(Number(limit || 50), 100));
+      socket.emit("chat:history", { messages: chatHistory.slice(-lim) });
+    });
+
+    // ✅ global chat send
+    socket.on("chat:send", (msg) => {
+      const id = msg?.id || crypto.randomBytes(8).toString("hex");
+      const text = safeText(msg?.text);
+      const ts = Number(msg?.ts || Date.now());
+
+      if (!text) return;
+
+      const payload = { id: String(id), text, ts };
+
+      chatHistory.push(payload);
+      if (chatHistory.length > CHAT_HISTORY_LIMIT) chatHistory.splice(0, chatHistory.length - CHAT_HISTORY_LIMIT);
+
+      io.emit("chat:message", payload);
     });
 
     socket.on("createRoom", ({ bet }) => {
@@ -184,6 +229,10 @@ app.prepare().then(() => {
 
     socket.on("disconnect", () => {
       balances.delete(socket.id);
+
+      // ✅ aktif kişi azalt
+      activeCount = Math.max(0, activeCount - 1);
+      io.emit("presence:update", { count: activeCount });
     });
   });
 

@@ -11,7 +11,7 @@ function clamp(n: number, a: number, b: number) {
 export default function Home() {
   const router = useRouter();
 
-  const [status, setStatus] = useState("Bağlanıyor...");
+  const [connected, setConnected] = useState<boolean>(() => socket.connected);
   const [roomCode, setRoomCode] = useState("");
   const [joinCode, setJoinCode] = useState("");
   const [balance, setBalance] = useState<number>(0);
@@ -21,15 +21,16 @@ export default function Home() {
 
   useEffect(() => {
     const onConnect = () => {
-      setStatus("✅ Bağlandı");
+      setConnected(true);
       socket.emit("balance:get");
     };
+
+    const onDisconnect = () => setConnected(false);
 
     const onBalance = (p: { balance: number }) => setBalance(Number(p?.balance || 0));
 
     const onRoomCreated = (p: { roomCode: string; bet: number }) => {
       setRoomCode(p.roomCode);
-      setStatus("✅ Oda oluşturuldu.");
       try {
         localStorage.setItem("gamblevs_room", p.roomCode);
         localStorage.setItem("gamblevs_bet", String(p.bet));
@@ -46,20 +47,20 @@ export default function Home() {
       router.push("/mines");
     };
 
-    const onErrorMessage = (msg: string) => {
-      setStatus("⚠️ Hata");
-      alert(msg);
-      setTimeout(() => setStatus(socket.connected ? "✅ Bağlandı" : "Bağlanıyor..."), 650);
-    };
+    const onErrorMessage = (msg: string) => alert(msg);
 
     socket.on("connect", onConnect);
+    socket.on("disconnect", onDisconnect);
     socket.on("balance:update", onBalance);
     socket.on("roomCreated", onRoomCreated);
     socket.on("gameStart", onGameStart);
     socket.on("errorMessage", onErrorMessage);
 
+    if (socket.connected) socket.emit("balance:get");
+
     return () => {
       socket.off("connect", onConnect);
+      socket.off("disconnect", onDisconnect);
       socket.off("balance:update", onBalance);
       socket.off("roomCreated", onRoomCreated);
       socket.off("gameStart", onGameStart);
@@ -67,11 +68,8 @@ export default function Home() {
     };
   }, [router]);
 
-  const isConnected = status.includes("Bağlandı");
-
   return (
     <main className="min-h-screen bg-[#060913] text-white relative overflow-hidden">
-      {/* background */}
       <div className="pointer-events-none absolute inset-0">
         <div
           className="bgGlow"
@@ -99,7 +97,6 @@ export default function Home() {
       </div>
 
       <div className="relative mx-auto max-w-6xl px-4 py-7">
-        {/* HEADER */}
         <header className="flex items-center justify-between gap-4 mb-8">
           <div className="flex items-center gap-4 min-w-0">
             <div className="logoWrap">
@@ -107,9 +104,14 @@ export default function Home() {
             </div>
 
             <div className="min-w-0">
-              <h1 className="title">
-                GAMBLE<span className="titleVS">VS</span>
-              </h1>
+              <div className="flex items-end gap-2 flex-wrap">
+                <h1 className="title">
+                  GAMBLE<span className="titleVS">VS</span>
+                </h1>
+                <span className="pill" title={connected ? "online" : "offline"}>
+                  <span className={`pillDot ${connected ? "pillDotOk" : ""}`} />
+                </span>
+              </div>
             </div>
           </div>
 
@@ -120,20 +122,10 @@ export default function Home() {
                 {balance} <span className="coin">💰</span>
               </div>
             </div>
-
-            <div className={`stat ${isConnected ? "statOk" : ""}`}>
-              <div className="statLabel">DURUM</div>
-              <div className="statValueRow">
-                <span className={`statusDot ${isConnected ? "statusDotOk" : ""}`} />
-                <span className="statValue">{status}</span>
-              </div>
-            </div>
           </div>
         </header>
 
-        {/* BODY */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* CREATE */}
           <section className="card">
             <div className="cardHead">
               <h2 className="cardTitle">Oda Oluştur</h2>
@@ -175,15 +167,14 @@ export default function Home() {
               </button>
             ) : (
               <div className="text-center mt-3">
-                <div className="text-xs font-extrabold tracking-[0.22em] text-white/55">ODA KODU</div>
-                <div className="mt-2 text-3xl font-black tracking-[0.24em] text-white drop-shadow">
+                <div className="text-xs tracking-[0.22em] text-white/55">ODA KODU</div>
+                <div className="mt-2 text-3xl tracking-[0.24em] text-white drop-shadow">
                   {roomCode}
                 </div>
               </div>
             )}
           </section>
 
-          {/* JOIN */}
           <section className="card">
             <div className="cardHead">
               <h2 className="cardTitle">Katıl</h2>
@@ -196,7 +187,7 @@ export default function Home() {
                 value={joinCode}
                 onChange={(e) => setJoinCode(e.target.value.toUpperCase().replace(/[^A-Z0-9]/g, ""))}
                 placeholder="AB12CD"
-                className="field tracking-widest font-extrabold"
+                className="field tracking-widest"
               />
             </label>
 
@@ -209,4 +200,3 @@ export default function Home() {
     </main>
   );
 }
-
