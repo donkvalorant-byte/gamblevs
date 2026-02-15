@@ -42,6 +42,9 @@ const PORT = Number(process.env.PORT || 3000);
 const rooms = new Map(); // roomCode -> room
 const balances = new Map(); // socket.id -> balance
 
+// ✅ Everyone starts with 10k
+const START_BALANCE = 10_000;
+
 // ---------- Anti-cheat helpers ----------
 function makeRateLimiter() {
   const buckets = new Map(); // key -> {tokens, updatedAt}
@@ -132,7 +135,8 @@ function calcMultiplier(safePicks) {
 }
 
 function getBalance(socketId) {
-  if (!balances.has(socketId)) balances.set(socketId, 1000);
+  // ✅ default 10k
+  if (!balances.has(socketId)) balances.set(socketId, START_BALANCE);
   return balances.get(socketId) || 0;
 }
 function setBalance(socketId, v) {
@@ -319,6 +323,7 @@ app.prepare().then(() => {
   const rateLimit = makeRateLimiter();
 
   io.on("connection", (socket) => {
+    // ✅ give 10k on first connect
     getBalance(socket.id);
     emitBalance(io, socket.id);
 
@@ -450,6 +455,9 @@ app.prepare().then(() => {
         room.players = room.players.filter((p) => p.socketId !== socket.id);
         if (room.players.length === 0) rooms.delete(code);
       }
+
+      // NOTE: balances are per-socket-id; removing is fine.
+      // If you want users to keep balance across refresh, you need a userId system.
       balances.delete(socket.id);
     });
   });
